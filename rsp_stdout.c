@@ -417,7 +417,16 @@ static int lna_state = DEFAULT_LNA_STATE;
 static int agc_state = DEFAULT_AGC_STATE;
 static int agc_set_point = DEFAULT_AGC_SETPOINT;
 static int gain_reduction = DEFAULT_GAIN_REDUCTION;
+static int gainReductionParameterPresent = 0;
+static int gainReductionParameter = 0;
+static int rspLNAParameterPresent = 0;
+static int rspLNAParameter = 0;
+static int AGCSetpointParameterPresent = 0;
+static int AGCSetpointParameter = 0;
 static int sample_shift = 2;
+static int agc_overload_detected_reported = 0;
+static int agc_overload_corrected_reported = 0;
+
 
 // *************************************
 
@@ -482,12 +491,18 @@ void event_callback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT tunerS,
 
 		if (params->powerOverloadParams.powerOverloadChangeType == sdrplay_api_Overload_Detected)
 		{
-			fprintf(stderr, "adc overload detected\n");
+			if (!agc_overload_detected_reported) {
+				fprintf(stderr, "adc overload detected.  This message will be output only once to avoid spamming.\n");
+				agc_overload_detected_reported = 1;
+			}
 			overload = 1;
 		}
 		else if (params->powerOverloadParams.powerOverloadChangeType == sdrplay_api_Overload_Corrected)
 		{
-			fprintf(stderr, "adc overload corrected\n");
+			if (!agc_overload_corrected_reported) {
+				fprintf(stderr, "adc overload corrected.  This message will be output only once to avoid spamming.\n");
+				agc_overload_corrected_reported = 1;
+			}
 			overload = 0;
 		}
 		break;
@@ -847,7 +862,11 @@ static int apply_agc_settings()
 	sdrplay_api_AgcControlT agc = agc_state ? sdrplay_api_AGC_CTRL_EN : sdrplay_api_AGC_DISABLE;
 
 	chParams->ctrlParams.agc.enable = agc;
-	chParams->ctrlParams.agc.setPoint_dBfs = agc_set_point;
+	if (AGCSetpointParameterPresent) {
+		chParams->ctrlParams.agc.setPoint_dBfs = AGCSetpointParameter;
+	} else {
+		chParams->ctrlParams.agc.setPoint_dBfs = agc_set_point;
+	}
 	chParams->ctrlParams.agc.attack_ms = 500;
 	chParams->ctrlParams.agc.decay_ms = 500;
 	chParams->ctrlParams.agc.decay_delay_ms = 200;
@@ -1066,9 +1085,17 @@ static int set_antenna_input(unsigned int antenna)
 
 			current_band = new_band;
 
-			gain_index_to_gain(last_gain_idx, &if_gr, &lnastate);			
-			gain_reduction = if_gr;
-			lna_state = lnastate;
+			gain_index_to_gain(last_gain_idx, &if_gr, &lnastate);
+			if (gainReductionParameterPresent) {
+				gain_reduction = gainReductionParameter;
+			} else {
+				gain_reduction = if_gr;
+			}
+			if (rspLNAParameterPresent) {
+				lna_state = rspLNAParameter;
+			} else {
+				lna_state = lnastate;
+			}
 		}
 
 		r = sdrplay_api_Update(chosenDev->dev, chosenDev->tuner, reason1, reason2);
@@ -1170,8 +1197,16 @@ int init_rsp_device(unsigned int sr, unsigned int freq, int enable_bias_t, unsig
 
 	// initialise at minimum gain	
 	if (!gain_index_to_gain(0, &ifgain, &lnastate)) {
-		gain_reduction = ifgain;
-		lna_state = lnastate;
+		if (gainReductionParameterPresent) {
+			gain_reduction = gainReductionParameter;
+		} else {
+			gain_reduction = ifgain;
+		}
+		if (rspLNAParameterPresent) {
+			lna_state = rspLNAParameter;
+		} else {
+			lna_state = lnastate;
+		}
 	}
 	
 	if (sr < 300e3) { bwType = sdrplay_api_BW_0_200; }
@@ -1320,7 +1355,12 @@ void usage(void)
 		"\t[-B Broadcast notch enable (default: disabled)\n"
 		"\t[-D DAB notch enable (default: disabled)\n"
 		"\t[-F RF notch enable (default: disabled)\n"
-		"\t[-b Sample bit-depth (8/16 default: 8)\n");
+		"\t[-b Sample bit-depth (8/16 default: 8)\n"
+        "\t[-r Gain reduction (default: 40  / values 20-59)]\n"
+		"\t[-l LNA state/level, about -6dB each step (default: 0 / values 0-0)]\n"
+		"\t[-x Auto Gain Control disable (default: enabled)]\n"
+		"\t[-g Auto Gain Control setpoint in dB (default: -30)\n"
+		);
 	exit(1);
 }
 
@@ -1352,7 +1392,7 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "rsp_stdout version %d.%d\n\n", RSP_TCP_VERSION_MAJOR, RSP_TCP_VERSION_MINOR);
 
-	while ((opt = getopt(argc, argv, "a:p:f:b:s:n:d:P:TvADBFRE")) != -1) {
+	while ((opt = getopt(argc, argv, "a:p:f:b:s:n:d:P:r:l:g:TvADBFREx")) != -1) {
 		switch (opt) {
 		case 'd':
 			device = atoi(optarg) - 1;
@@ -1362,6 +1402,21 @@ int main(int argc, char **argv)
 			break;
 		case 'P':
 			antenna = atoi(optarg);
+			break;
+		case 'r':
+			gainReductionParameter = atoi(optarg);
+			gainReductionParameterPresent = 1;
+			break;
+		case 'l':
+			rspLNAParameter = atoi(optarg);
+			rspLNAParameterPresent = 1;
+			break;
+		case 'g':
+			AGCSetpointParameter = atoi(optarg);
+			AGCSetpointParameterPresent = 1;
+			break;
+		case 'x':
+			agc_state = 0;
 			break;
 		case 'f':
 			frequency = (uint32_t)atofs(optarg);
